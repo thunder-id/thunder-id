@@ -1,0 +1,507 @@
+---
+title: LegacyThunderIDNodeClient
+description: Full authentication client for Node.js server-side applications
+---
+
+# `LegacyThunderIDNodeClient`
+
+The `LegacyThunderIDNodeClient` class provides the full authentication API for server-side Node.js applications. The class implements OAuth 2.0 Authorization Code flow with PKCE, manages user sessions, and exposes methods for token retrieval, user information, and session lifecycle operations.
+
+:::note
+If you are building a framework-specific integration (such as an Express.js adapter), extend [`ThunderIDNodeClient`](/docs/next/sdks/node/apis/clients/thunderid-node-client) or subclass `LegacyThunderIDNodeClient` directly.
+:::
+
+## Usage
+
+```ts title="src/auth.ts" showLineNumbers
+import { LegacyThunderIDNodeClient } from '@thunderid/node'
+
+const auth = new LegacyThunderIDNodeClient()
+
+await auth.initialize({
+  clientId: '<your-client-id>',
+  serverOrigin: 'https://localhost:8090',
+  afterSignInUrl: 'http://localhost:3000/callback',
+  afterSignOutUrl: 'http://localhost:3000',
+})
+```
+
+## Methods
+
+### `initialize`
+
+Initializes the client with the provided configuration and an optional custom storage backend. You must call `initialize` before using any other method.
+
+```ts
+initialize(config: AuthClientConfig<T>, store?: Storage): Promise<boolean>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `config` | `AuthClientConfig<T>` | ✅ | The client configuration object. See [`ThunderIDNodeConfig`](/docs/next/sdks/node/apis/config/thunderid-node-config) for available properties. |
+| `store` | `Storage` | ❌ | Custom storage backend for session data. Defaults to an in-memory cache when not provided. |
+
+#### Returns
+
+`Promise<boolean>` — Resolves to `true` when initialization succeeds.
+
+#### Example
+
+```ts
+await auth.initialize(
+  {
+    clientId: '<your-client-id>',
+    serverOrigin: 'https://localhost:8090',
+    afterSignInUrl: 'http://localhost:3000/callback',
+    afterSignOutUrl: 'http://localhost:3000',
+  },
+  customStore,
+)
+```
+
+---
+
+### `signIn`
+
+Initiates the sign-in flow for a user. On the first call (no authorization code present), the method invokes `authURLCallback` with the authorization URL and resolves with an empty token response. On the callback call (authorization code present), the method exchanges the code for tokens and resolves with the full `TokenResponse`.
+
+```ts
+signIn(
+  authURLCallback: AuthURLCallback,
+  userId: string,
+  authorizationCode?: string,
+  sessionState?: string,
+  state?: string,
+  signInConfig?: Record<string, string | boolean>,
+): Promise<TokenResponse>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `authURLCallback` | `(url: string) => void` | ✅ | Callback that receives the authorization URL. Redirect the user to this URL to start the sign-in flow. |
+| `userId` | `string` | ✅ | A unique identifier for the user session. Used to associate tokens with a specific user. |
+| `authorizationCode` | `string` | ❌ | The authorization code returned by the identity provider after the user signs in. |
+| `sessionState` | `string` | ❌ | The session state value returned by the identity provider. |
+| `state` | `string` | ❌ | The state parameter returned in the redirect URL. |
+| `signInConfig` | `Record<string, string \| boolean>` | ❌ | Additional parameters to include in the authorization request. |
+
+#### Returns
+
+`Promise<TokenResponse>` — Resolves with the token response after a successful token exchange, or with an empty token response when the authorization URL redirect is in progress.
+
+#### Example
+
+```ts
+// Step 1 — Redirect user to authorization URL
+app.get('/sign-in', (req, res) => {
+  auth.signIn(
+    (authUrl) => res.redirect(authUrl),
+    req.cookies['session_id'],
+  )
+})
+
+// Step 2 — Handle the callback
+app.get('/callback', async (req, res) => {
+  const { code, session_state, state } = req.query
+
+  const tokens = await auth.signIn(
+    (authUrl) => res.redirect(authUrl),
+    req.cookies['session_id'],
+    code as string,
+    session_state as string,
+    state as string,
+  )
+
+  res.redirect('/dashboard')
+})
+```
+
+---
+
+### `signOut`
+
+Clears the user's session data and returns the identity provider sign-out URL. Redirect the user to this URL to complete the sign-out flow.
+
+```ts
+signOut(userId: string): Promise<string>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ✅ | The unique identifier of the user session to end. |
+
+#### Returns
+
+`Promise<string>` — Resolves with the sign-out URL.
+
+#### Example
+
+```ts
+app.get('/sign-out', async (req, res) => {
+  const signOutUrl = await auth.signOut(req.cookies['session_id'])
+  res.clearCookie('session_id')
+  res.redirect(signOutUrl)
+})
+```
+
+---
+
+### `isSignedIn`
+
+Checks whether the user has an active, valid session. The method also attempts a token refresh if the session has expired but a refresh token exists.
+
+```ts
+isSignedIn(userId: string): Promise<boolean>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ✅ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<boolean>` — Resolves to `true` when the user has an active session.
+
+#### Example
+
+```ts
+const signedIn = await auth.isSignedIn(req.cookies['session_id'])
+
+if (!signedIn) {
+  return res.redirect('/sign-in')
+}
+```
+
+---
+
+### `getAccessToken`
+
+Returns the access token for the specified user session.
+
+```ts
+getAccessToken(userId?: string): Promise<string>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ❌ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<string>` — Resolves with the access token string.
+
+#### Example
+
+```ts
+const accessToken = await auth.getAccessToken(req.cookies['session_id'])
+```
+
+---
+
+### `getIdToken`
+
+Returns the raw ID token string for the specified user session.
+
+```ts
+getIdToken(userId: string): Promise<string>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ✅ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<string>` — Resolves with the ID token string.
+
+---
+
+### `getDecodedIdToken`
+
+Returns the decoded payload of the ID token.
+
+```ts
+getDecodedIdToken(userId?: string, idToken?: string): Promise<IdToken>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ❌ | The unique identifier of the user session. |
+| `idToken` | `string` | ❌ | A raw ID token string to decode. When provided, `userId` is ignored. |
+
+#### Returns
+
+`Promise<IdToken>` — Resolves with the decoded ID token claims.
+
+#### Example
+
+```ts
+const claims = await auth.getDecodedIdToken(req.cookies['session_id'])
+console.log(claims.sub) // user subject identifier
+```
+
+---
+
+### `getUser`
+
+Returns basic user information extracted from the ID token for the specified session.
+
+```ts
+getUser(userId: string): Promise<User>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ✅ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<User>` — Resolves with the user information object.
+
+#### Example
+
+```ts
+const user = await auth.getUser(req.cookies['session_id'])
+console.log(user.username)
+```
+
+---
+
+### `getOpenIDProviderEndpoints`
+
+Returns the OpenID Connect (OIDC) endpoints discovered from the identity provider's `.well-known` endpoint.
+
+```ts
+getOpenIDProviderEndpoints(): Promise<OIDCEndpoints>
+```
+
+#### Returns
+
+`Promise<OIDCEndpoints>` — Resolves with an object containing endpoint URLs such as the authorization endpoint, token endpoint, and end-session endpoint.
+
+---
+
+### `getSignInUrl`
+
+Generates and returns the authorization URL without initiating a redirect. Use this method when you need to construct the URL manually instead of using the `authURLCallback` in `signIn`.
+
+```ts
+getSignInUrl(requestConfig?: ExtendedAuthorizeRequestUrlParams, userId?: string): Promise<string>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `requestConfig` | `ExtendedAuthorizeRequestUrlParams` | ❌ | Additional parameters to include in the authorization URL. |
+| `userId` | `string` | ❌ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<string>` — Resolves with the authorization URL string.
+
+---
+
+### `refreshAccessToken`
+
+Exchanges the refresh token for a new access token and updates the stored session.
+
+```ts
+refreshAccessToken(userId?: string): Promise<TokenResponse>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ❌ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<TokenResponse>` — Resolves with the new token response.
+
+---
+
+### `revokeAccessToken`
+
+Revokes the current access token at the identity provider.
+
+```ts
+revokeAccessToken(userId?: string): Promise<Response>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `userId` | `string` | ❌ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<Response>` — Resolves with the identity provider revocation endpoint response.
+
+---
+
+### `exchangeToken`
+
+Exchanges the current token for a new token using a custom grant type. Use this method for advanced scenarios such as token exchange flows.
+
+```ts
+exchangeToken(config: TokenExchangeRequestConfig, userId?: string): Promise<TokenResponse | Response>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `config` | `TokenExchangeRequestConfig` | ✅ | Configuration object specifying the grant type, data, and request options. |
+| `userId` | `string` | ❌ | The unique identifier of the user session. |
+
+#### Returns
+
+`Promise<TokenResponse | Response>` — Resolves with the token response or the raw server response, depending on the configuration.
+
+#### Example
+
+```ts
+const tokenResponse = await auth.exchangeToken(
+  {
+    attachToken: false,
+    data: {
+      client_id: '<your-client-id>',
+      grant_type: 'account_switch',
+      scope: 'openid profile',
+      token: currentAccessToken,
+    },
+    id: 'account-switch',
+    returnResponse: true,
+    returnsSession: true,
+    signInRequired: true,
+  },
+  req.cookies['session_id'],
+)
+```
+
+---
+
+### `reInitialize`
+
+Updates the client configuration without creating a new instance. Use this method to change configuration values at runtime.
+
+```ts
+reInitialize(config: Partial<AuthClientConfig<T>>): Promise<void>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `config` | `Partial<AuthClientConfig<T>>` | ✅ | The configuration properties to update. |
+
+#### Returns
+
+`Promise<void>`
+
+---
+
+### `getConfigData`
+
+Returns the current client configuration.
+
+```ts
+getConfigData(): Promise<AuthClientConfig<T>>
+```
+
+#### Returns
+
+`Promise<AuthClientConfig<T>>` — Resolves with the active configuration object.
+
+---
+
+### `getStorageManager`
+
+Returns the storage manager instance used by the client. Use this to access or manipulate session data directly.
+
+```ts
+getStorageManager(): Promise<StorageManager<T>>
+```
+
+#### Returns
+
+`Promise<StorageManager<T>>` — Resolves with the storage manager.
+
+---
+
+### `decodeJwtToken`
+
+Decodes a JWT token and returns the payload as a typed object. The method performs base64 decoding only and does not verify the token signature.
+
+```ts
+decodeJwtToken<K = Record<string, unknown>>(token: string): Promise<K>
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `token` | `string` | ✅ | The JWT token string to decode. |
+
+#### Returns
+
+`Promise<K>` — Resolves with the decoded token payload.
+
+---
+
+### `isSignOutSuccessful` (static)
+
+Checks whether a given URL indicates a successful sign-out.
+
+```ts
+static isSignOutSuccessful(afterSignOutUrl: string): boolean
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `afterSignOutUrl` | `string` | ✅ | The URL to which the identity provider redirected after sign-out. |
+
+#### Returns
+
+`boolean` — `true` when the URL indicates a successful sign-out.
+
+---
+
+### `didSignOutFail` (static)
+
+Checks whether a given URL indicates a failed sign-out attempt.
+
+```ts
+static didSignOutFail(afterSignOutUrl: string): boolean
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :---: | :--- |
+| `afterSignOutUrl` | `string` | ✅ | The URL to which the identity provider redirected after sign-out. |
+
+#### Returns
+
+`boolean` — `true` when the URL indicates a sign-out failure.
